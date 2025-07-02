@@ -816,8 +816,8 @@
             return;
         }
         // Gather selected asset info from the table rows
-        let tableHtml = `<div class='table-responsive'><table class='table table-bordered'><thead><tr><th>Code</th><th>Name</th><th>Category</th><th>
-            Size <select id='setAllSize' class='form-select form-select-sm d-inline-block' style='width:auto; margin-left:8px;'>
+        let tableHtml = `<div class='table-responsive'><table class='table table-bordered'><thead><tr><th>Code</th><th>Name</th><th>Serial Number</th><th>
+            Size <span class="text-danger">*</span><select id='setAllSize' class='form-select form-select-sm d-inline-block' style='width:auto; margin-left:8px;'>
                 <option value=''>Set All</option>
                 <option value='Small'>Small</option>
                 <option value='Medium'>Medium</option>
@@ -829,7 +829,7 @@
             const code = row.querySelector('td:nth-child(2)').innerText;
             const name = row.querySelector('td:nth-child(3)').innerText;
             const category = row.querySelector('td:nth-child(4)').innerText;
-            tableHtml += `<tr><td>${code}</td><td>${name}</td><td>${category}</td><td><select class='form-select form-select-sm label-size-select'><option value='Small'>Small</option><option value='Medium'>Medium</option><option value='Large'>Large</option></select></td></tr>`;
+            tableHtml += `<tr><td>${code}</td><td>${name}</td><td>${category}</td><td><p class="label-size-text mb-0"></p></td></tr>`;
         });
         tableHtml += '</tbody></table></div>';
         document.getElementById('selectedAssetsList').innerHTML = tableHtml;
@@ -838,7 +838,7 @@
         if (setAllSize) {
             setAllSize.addEventListener('change', function() {
                 if (this.value) {
-                    document.querySelectorAll('.label-size-select').forEach(sel => sel.value = this.value);
+                    document.querySelectorAll('.label-size-text').forEach(p => p.innerText = this.value);
                 }
             });
         }
@@ -846,31 +846,35 @@
         modal.show();
     }
 
-    // Add handler for the Print button in the modal
-    document.addEventListener('DOMContentLoaded', function() {
+    document.addEventListener('DOMContentLoaded', function () {
         const confirmPrintBtn = document.getElementById('confirmPrintBtn');
         if (confirmPrintBtn) {
-            confirmPrintBtn.onclick = function() {
-                // Gather selected asset IDs and their label sizes from the modal table
+            confirmPrintBtn.onclick = function () {
+                // Get selected checkboxes
                 const checkboxes = document.querySelectorAll('.asset-checkbox:checked');
                 if (checkboxes.length === 0) {
                     alert('Please select at least one asset to print.');
                     return;
                 }
-                // Map asset IDs to their selected label size
-                const assetsToSend = [];
-                const modalRows = document.querySelectorAll('#selectedAssetsList tbody tr');
-                modalRows.forEach((row, idx) => {
-                    const assetId = checkboxes[idx].value;
-                    const sizeText = row.querySelector('.label-size-select').value;
-                    // Map UI text to backend value
-                    let labelSize = 'S';
-                    if (sizeText === 'Medium') labelSize = 'M';
-                    if (sizeText === 'Large') labelSize = 'L';
-                    assetsToSend.push({ id: assetId, label_size: labelSize });
-                });
 
-                // Send print request
+                // Get the selected size from the header select
+                const selectedSizeText = document.getElementById('setAllSize').value;
+                if (!selectedSizeText) {
+                    alert('Please select a label size before printing.');
+                    return;
+                }
+
+                // Map UI label to backend label code
+                let labelSize = 'S';
+                if (selectedSizeText === 'Medium') labelSize = 'M';
+                if (selectedSizeText === 'Large') labelSize = 'L';
+
+                // Collect asset IDs
+                const assetsToSend = Array.from(checkboxes).map(cb => ({
+                    id: cb.value
+                }));
+
+                // Send request
                 fetch('/print/send', {
                     method: 'POST',
                     headers: {
@@ -878,14 +882,15 @@
                         'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').getAttribute('content')
                     },
                     body: JSON.stringify({
+                        size: labelSize,
                         assets: assetsToSend
                     })
                 })
                 .then(response => response.json())
                 .then(data => {
                     if (data.results) {
-                        let successCount = data.results.filter(r => r.success).length;
-                        let failCount = data.results.length - successCount;
+                        const successCount = data.results.filter(r => r.success).length;
+                        const failCount = data.results.length - successCount;
                         alert(`Print jobs sent!\nSuccess: ${successCount}\nFailed: ${failCount}`);
                     } else {
                         alert('Error: ' + (data.error || 'Unknown error'));
@@ -897,6 +902,7 @@
             };
         }
     });
+
 </script>
 @endpush
 @endsection 

@@ -12,77 +12,97 @@ function fillVbsTemplate(template, replacements) {
     return template.replace(/\{\{(\w+)\}\}/g, (_, key) => replacements[key] || '');
 }
 
+function escapeVbs(str) {
+    return (str || '').replace(/"/g, '""');
+}
+
+function generateBatchVbsFile(lbxPath, assets, outputPath) {
+    const vbsLines = [
+        `Set ObjDoc = CreateObject("bpac.Document")`,
+        `bRet = ObjDoc.Open("${lbxPath.replace(/\\/g, "\\\\")}")`,
+        `If (bRet <> False) Then`,
+        `    ObjDoc.StartPrint "BatchPrint", 528`
+    ];
+
+    assets.forEach(asset => {
+        const name = escapeVbs(asset.assetName || '');
+        const hospital = escapeVbs('SMH CIBINONG');
+        const code = escapeVbs(asset.assetCode || '');
+        let serial = asset.assetSerialNumber || '-';
+        if (serial.length > 16) serial = serial.substring(0, 16);
+        serial = escapeVbs(serial);
+
+        vbsLines.push(
+            `    ObjDoc.GetObject("assetName").Text = "${name}"`,
+            `    ObjDoc.GetObject("hospitalName").Text = "${hospital}"`,
+            `    ObjDoc.GetObject("qrCode").Text = "${code}"`,
+            `    ObjDoc.GetObject("assetSerialNumber").Text = "${serial}"`,
+            `    ObjDoc.PrintOut 1, 528`,
+            ``
+        );
+    });
+
+    vbsLines.push(
+        `    ObjDoc.EndPrint`,
+        `    ObjDoc.Close`,
+        `End If`,
+        `Set ObjDoc = Nothing`
+    );
+
+    fs.writeFileSync(outputPath, vbsLines.join('\r\n'));
+}
+
 app.post('/print', (req, res) => {
-    const assets = req.body.assets;
+    const { size, assets } = req.body;
+
+    console.log('request:', req.body.assets);
+
     if (!Array.isArray(assets) || assets.length === 0) {
         return res.status(400).json({ error: 'No assets provided.' });
     }
 
-    const results = [];
-    let completed = 0;
+    if (!size || !['S', 'M', 'L'].includes(size)) {
+        return res.status(400).json({ error: 'Invalid or missing size.' });
+    }
 
-    assets.forEach((asset, idx) => {
-        const { assetSerialNumber, assetName, hospitalName, assetCode, labelSize } = asset;
-        if (
-            assetName === undefined || assetName === null || assetName === '' ||
-            hospitalName === undefined || hospitalName === null || hospitalName === '' ||
-            assetCode === undefined || assetCode === null || assetCode === '' ||
-            labelSize === undefined || labelSize === null || labelSize === ''
-        ) {
-            results[idx] = { success: false, error: 'Missing required fields.', asset };
-            completed++;
-            if (completed === assets.length) {
-                return res.json({ results });
-            }
-            return;
-        }
+    const lbxFileMap = { S: 'S.lbx', M: 'M.lbx', L: 'L.lbx' };
+    const lbxPath = path.join(__dirname, lbxFileMap[size]);
 
-        const lbxFileMap = { S: 'S.lbx', M: 'M.lbx', L: 'L.lbx' };
-        const lbxFile = lbxFileMap[labelSize];
-        if (!lbxFile) {
-            results[idx] = { success: false, error: 'Invalid label size.', asset };
-            completed++;
-            if (completed === assets.length) {
-                return res.json({ results });
-            }
-            return;
-        }
-        const lbxPath = path.join(__dirname, lbxFile);
-        const vbsTemplatePath = path.join(__dirname, 'print_template.vbs');
-        const vbsTemplate = fs.readFileSync(vbsTemplatePath, 'utf8');
-        // Handle serial number: max 16 chars, use '-' if missing
-        let serialNumber = assetSerialNumber;
-        if (!serialNumber || serialNumber.trim() === '') {
-            serialNumber = '-';
-        } else if (serialNumber.length > 16) {
-            serialNumber = serialNumber.substring(0, 16);
-        }
-        const filledVbs = fillVbsTemplate(vbsTemplate, {
-            LBX_FILE: lbxPath,
-            ASSET_NAME: assetName,
-            HOSPITAL_NAME: 'SMH CIBINONG',
-            SERIAL_NUMBER: serialNumber,
-            QRCODE: assetCode
-        });
-        const tempVbsPath = path.join(__dirname, `print_job_${Date.now()}_${idx}.vbs`);
-        fs.writeFileSync(tempVbsPath, filledVbs);
+    const tempVbsPath = path.join(__dirname, `print_batch_${Date.now()}.vbs`);
+
+    try {
+        generateBatchVbsFile(lbxPath, assets, tempVbsPath);
+
         const command = `cscript //nologo "${tempVbsPath}"`;
         console.log('Running:', command);
+
         exec(command, (error, stdout, stderr) => {
-            console.log('stdout:', stdout);
-            console.log('stderr:', stderr);
-            fs.unlinkSync(tempVbsPath);
+            fs.unlinkSync(tempVbsPath); // Clean up VBS file
             if (error) {
-                results[idx] = { success: false, error: stderr || error.message, asset };
-            } else {
-                results[idx] = { success: true, output: stdout, asset };
+                console.error('Error:', stderr || error.message);
+                return res.status(500).json({
+                    results: assets.map(a => ({
+                        success: false,
+                        error: stderr || error.message,
+                        asset: a
+                    }))
+                });
             }
-            completed++;
-            if (completed === assets.length) {
-                res.json({ results });
-            }
+
+            console.log('stdout:', stdout);
+            res.json({
+                results: assets.map(a => ({
+                    success: true,
+                    output: stdout,
+                    asset: a
+                }))
+            });
         });
-    });
+
+    } catch (err) {
+        console.error('VBS generation error:', err);
+        return res.status(500).json({ error: 'Failed to generate VBS script.' });
+    }
 });
 
 app.listen(PORT, () => {

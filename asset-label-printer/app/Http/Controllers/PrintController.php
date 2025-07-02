@@ -245,6 +245,8 @@ class PrintController extends Controller
     public function sendToPrinter(Request $request)
     {
         $assetsInput = $request->input('assets');
+        $size = $request->input('size');
+
         if (!$assetsInput || !is_array($assetsInput)) {
             return response()->json(['error' => 'No assets provided.'], 400);
         }
@@ -262,12 +264,12 @@ class PrintController extends Controller
                 'assetName' => $asset->name,
                 'hospitalName' => $organization,
                 'assetCode' => $asset->code,
-                'labelSize' => $input['label_size'] ?? 'S',
             ];
         }
 
         $response = \Illuminate\Support\Facades\Http::post('http://localhost:3001/print', [
-            'assets' => $payload
+            'assets' => $payload,
+            'size' => $size
         ]);
 
         return response()->json($response->json());
